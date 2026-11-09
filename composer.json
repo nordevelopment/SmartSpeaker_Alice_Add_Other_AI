@@ -1,0 +1,23 @@
+{
+    "name": "nordeveloper/alica_chatgpt",
+    "description": "Навык для Яндекс.Алисы, подключающий её к ChatGPT / совместимым AI API через чистый PHP и cURL.",
+    "type": "project",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Norayr Petrosyan",
+            "email": "nordeveloper@gmail.com"
+        }
+    ],
+    "require": {
+        "php": ">=8.1",
+        "ext-curl": "*",
+        "ext-json": "*",
+        "ext-mbstring": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        }
+    }
+}
