@@ -1,25 +1,8 @@
 <?php
 
 declare(strict_types=1);
+require_once __DIR__ . '/vendor/autoload.php';
 
-// Автозагрузка через Composer либо встроенный PSR-4 автозагрузчик
-if (file_exists(__DIR__ . '/vendor/autoload.php')) {
-    require_once __DIR__ . '/vendor/autoload.php';
-} else {
-    spl_autoload_register(function (string $class): void {
-        $prefix = 'App\\';
-        $baseDir = __DIR__ . '/src/';
-        $len = strlen($prefix);
-        if (strncmp($prefix, $class, $len) !== 0) {
-            return;
-        }
-        $relativeClass = substr($class, $len);
-        $file = $baseDir . str_replace('\\', '/', $relativeClass) . '.php';
-        if (file_exists($file)) {
-            require_once $file;
-        }
-    });
-}
 
 use App\Env;
 use App\HttpClient;
@@ -34,6 +17,7 @@ $baseUrl    = (string)(Env::get('API_BASE_URL', 'https://api.openai.com/v1'));
 $model      = (string)(Env::get('AI_MODEL', 'gpt-6-luna'));
 $proxy      = Env::get('HTTP_PROXY') ?: Env::get('HTTPS_PROXY');
 $timeout    = (int)(Env::get('AI_TIMEOUT', 20));
+
 
 // Инициализация HTTP-клиента
 $httpClient = new HttpClient([
@@ -182,7 +166,7 @@ if ($cleanedMessage !== '') {
     $responsePayload['response']['tts']  = $ttsText . ' <speaker audio="alice-sounds-things-door-2.opus">';
 } else {
     // Приветствие при старте навыка или пустом запросе
-    $welcomeText = 'Привет! Я умный ассистент на базе искусственного интеллекта. Задайте мне любой вопрос.';
+    $welcomeText = 'Привет! Я Алиса, сейчас работаю на базе '.$model.' искусственного интеллекта. Задайте мне любой вопрос.';
     $responsePayload['response']['text'] = $welcomeText;
     $responsePayload['response']['tts']  = $welcomeText;
 }
