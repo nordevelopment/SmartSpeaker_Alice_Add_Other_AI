@@ -1,6 +1,6 @@
-# Alice to ChatGPT / OpenRouter (Яндекс.Алиса + AI)
+#Умная колонка Алису подключаем другои ИИ (AI) /ChatGPT, Gemini, Grok, Deepseek, Qwen и другие
 
-Вебхук для кастомного навыка Яндекс.Алисы, подключающий её к OpenAI API, OpenRouter или любому совместимому с Chat Completions API провайдеру на **чистом PHP (ext-curl)** без тяжелых внешних библиотек (без Guzzle).
+Вебхук для кастомного навыка Яндекс.Алисы, подключающий её к OpenAI API, OpenRouter или любому совместимому с Chat Completions API провайдеру на **чистом PHP (ext-curl)** без тяжелых внешних библиотек.
 
 ---
 
