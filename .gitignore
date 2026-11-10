@@ -1,3 +1,5 @@
 /vendor/
 /.env
+/deploy/
+/deploy.sh
 .DS_Store

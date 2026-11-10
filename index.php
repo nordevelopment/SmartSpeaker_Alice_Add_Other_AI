@@ -1,7 +1,13 @@
 <?php
 
 declare(strict_types=1);
-require_once __DIR__ . '/vendor/autoload.php';
+
+if (file_exists(__DIR__ . '/vendor/autoload.php')) {
+    require_once __DIR__ . '/vendor/autoload.php';
+} else {
+    require_once __DIR__ . '/src/Env.php';
+    require_once __DIR__ . '/src/HttpClient.php';
+}
 
 
 use App\Env;
@@ -12,11 +18,18 @@ use App\HttpException;
 Env::load(__DIR__ . '/.env');
 
 // Конфигурация API
-$apiKey     = (string)(Env::get('AI_API_KEY') ?: Env::get('OPENAI_API_KEY') ?: '');
-$baseUrl    = (string)(Env::get('API_BASE_URL', 'https://api.openai.com/v1'));
-$model      = (string)(Env::get('AI_MODEL', 'gpt-6-luna'));
-$proxy      = Env::get('HTTP_PROXY') ?: Env::get('HTTPS_PROXY');
-$timeout    = (int)(Env::get('AI_TIMEOUT', 20));
+$apiKey       = (string)(Env::get('AI_API_KEY') ?: Env::get('OPENAI_API_KEY') ?: '');
+$baseUrl      = (string)(Env::get('API_BASE_URL', 'https://api.openai.com/v1'));
+$model        = (string)(Env::get('AI_MODEL', 'gpt-6-luna'));
+$proxy        = Env::get('HTTP_PROXY') ?: Env::get('HTTPS_PROXY');
+$timeout      = (int)(Env::get('AI_TIMEOUT', 20));
+$maxTokens    = (int)(Env::get('AI_MAX_TOKENS', 400));
+$reasoningRaw = strtoupper(trim((string)(Env::get('REASONING', 'OFF'))));
+$secretKey    = trim((string)(Env::get('SECRET_KEY', '')));
+$systemPrompt = trim((string)(Env::get(
+    'SYSTEM_PROMPT',
+    'Ты голосовой помощник в умной колонке. Отвечай кратко, по сути, разговорным языком (1-3 предложения), без списков и без markdown-разметки.'
+)));
 
 
 // Инициализация HTTP-клиента
@@ -60,8 +73,15 @@ function sanitizeForTts(string $text): string
  *
  * @param array<int, array{role: string, content: string}> $history
  */
-function askAI(string $userMessage, array &$history, HttpClient $client, string $model): string
-{
+function askAI(
+    string $userMessage,
+    array &$history,
+    HttpClient $client,
+    string $model,
+    int $maxTokens,
+    string $reasoningMode,
+    string $systemPrompt
+): string {
     $history[] = [
         'role'    => 'user',
         'content' => $userMessage,
@@ -72,12 +92,37 @@ function askAI(string $userMessage, array &$history, HttpClient $client, string 
         $history = array_slice($history, -10);
     }
 
+    $messages = $history;
+    if ($systemPrompt !== '') {
+        array_unshift($messages, [
+            'role'    => 'system',
+            'content' => $systemPrompt,
+        ]);
+    }
+
+    $payload = [
+        'model'    => $model,
+        'messages' => $messages,
+    ];
+
+    if ($maxTokens > 0) {
+        $payload['max_tokens'] = $maxTokens;
+    }
+
+    if (in_array($reasoningMode, ['OFF', 'NONE', 'FALSE', '0', 'DISABLE', 'DISABLED'], true)) {
+        $payload['reasoning'] = [
+            'effort'  => 'none',
+            'exclude' => true,
+        ];
+    } elseif (in_array($reasoningMode, ['MINIMAL', 'LOW', 'MEDIUM'], true)) {
+        $payload['reasoning'] = [
+            'effort' => strtolower($reasoningMode),
+        ];
+    }
+
     try {
         $response = $client->post('/chat/completions', [
-            'json' => [
-                'model'    => $model,
-                'messages' => $history,
-            ],
+            'json' => $payload,
         ]);
 
         if (!$response->isSuccessful()) {
@@ -114,6 +159,23 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     header('Content-Type: text/plain; charset=utf-8');
     echo 'Method Not Allowed';
     exit;
+}
+
+// Проверка SECRET_KEY (если задан и не равен дефолтному плейсхолдеру)
+if ($secretKey !== '' && !in_array($secretKey, ['YOUR_SEKCRET_WORD', 'YOUR_SECRET_WORD', 'your_secret_key_here'], true)) {
+    $providedKey = (string)($_GET['key'] ?? $_GET['secret'] ?? $_SERVER['HTTP_X_SECRET_KEY'] ?? '');
+    if ($providedKey === '' && isset($_SERVER['HTTP_AUTHORIZATION'])) {
+        if (preg_match('/^Bearer\s+(.+)$/i', (string)$_SERVER['HTTP_AUTHORIZATION'], $matches)) {
+            $providedKey = trim($matches[1]);
+        }
+    }
+
+    if ($providedKey === '' || !hash_equals($secretKey, $providedKey)) {
+        http_response_code(403);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo 'Forbidden: invalid secret key';
+        exit;
+    }
 }
 
 $rawInput = file_get_contents('php://input');
@@ -156,7 +218,15 @@ $originalUtterance = (string)($input['request']['original_utterance'] ?? '');
 $cleanedMessage = cleanRequest($originalUtterance);
 
 if ($cleanedMessage !== '') {
-    $botReply = askAI($cleanedMessage, $_SESSION['messages'], $httpClient, $model);
+    $botReply = askAI(
+        $cleanedMessage,
+        $_SESSION['messages'],
+        $httpClient,
+        $model,
+        $maxTokens,
+        $reasoningRaw,
+        $systemPrompt
+    );
 
     // Ограничение длины текста для Алисы (максимум 1024 символа)
     $displayText = mb_strlen($botReply) > 1000 ? mb_substr($botReply, 0, 997) . '...' : $botReply;
