@@ -7,9 +7,11 @@ if (file_exists(__DIR__ . '/vendor/autoload.php')) {
 } else {
     require_once __DIR__ . '/src/Env.php';
     require_once __DIR__ . '/src/HttpClient.php';
+    require_once __DIR__ . '/src/ConversationHistory.php';
 }
 
 
+use App\ConversationHistory;
 use App\Env;
 use App\HttpClient;
 use App\HttpException;
@@ -26,6 +28,7 @@ $timeout      = (int)(Env::get('AI_TIMEOUT', 20));
 $maxTokens    = (int)(Env::get('AI_MAX_TOKENS', 400));
 $reasoningRaw = strtoupper(trim((string)(Env::get('REASONING', 'OFF'))));
 $secretKey    = trim((string)(Env::get('SECRET_KEY', '')));
+$historyDirectory = (string)(Env::get('HISTORY_DIR') ?: sys_get_temp_dir() . '/alice-history-' . hash('sha256', __DIR__));
 $systemPrompt = trim((string)(Env::get(
     'SYSTEM_PROMPT',
     'Ты голосовой помощник в умной колонке. Отвечай кратко, по сути, разговорным языком (1-3 предложения), без списков и без markdown-разметки.'
@@ -71,28 +74,28 @@ function sanitizeForTts(string $text): string
 /**
  * Отправляет диалог в OpenAI / OpenRouter Chat Completion API.
  *
- * @param array<int, array{role: string, content: string}> $history
  */
 function askAI(
     string $userMessage,
-    array &$history,
+    ?ConversationHistory $history,
     HttpClient $client,
     string $model,
     int $maxTokens,
     string $reasoningMode,
     string $systemPrompt
 ): string {
-    $history[] = [
+    try {
+        $messages = $history?->load() ?? [];
+    } catch (Throwable $e) {
+        error_log('Cannot load conversation history: ' . $e->getMessage());
+        $messages = [];
+    }
+
+    $messages[] = [
         'role'    => 'user',
         'content' => $userMessage,
     ];
 
-    // Ограничиваем глубину контекста последними 10 сообщениями для контроля лимитов и скорости
-    if (count($history) > 10) {
-        $history = array_slice($history, -10);
-    }
-
-    $messages = $history;
     if ($systemPrompt !== '') {
         array_unshift($messages, [
             'role'    => 'system',
@@ -138,10 +141,11 @@ function askAI(
             return 'Не удалось получить ответ от сервиса.';
         }
 
-        $history[] = [
-            'role'    => 'assistant',
-            'content' => $reply,
-        ];
+        try {
+            $history?->append($userMessage, $reply);
+        } catch (Throwable $e) {
+            error_log('Cannot save conversation history: ' . $e->getMessage());
+        }
 
         return $reply;
     } catch (HttpException $e) {
@@ -181,29 +185,11 @@ if ($secretKey !== '' && !in_array($secretKey, ['YOUR_SEKCRET_WORD', 'YOUR_SECRE
 $rawInput = file_get_contents('php://input');
 $input = json_decode((string)$rawInput, true);
 
-if (!is_array($input) || !isset($input['session'], $input['version'])) {
+if (!is_array($input) || !is_array($input['session'] ?? null) || !isset($input['version'])) {
     http_response_code(400);
     header('Content-Type: text/plain; charset=utf-8');
     echo 'Bad Request: invalid Yandex Dialogs payload';
     exit;
-}
-
-// Привязка сессии PHP к session_id Алисы (Яндекс не передает куки браузера)
-$rawSessionId = (string)($input['session']['session_id'] ?? '');
-if ($rawSessionId !== '') {
-    $cleanSessionId = preg_replace('/[^a-zA-Z0-9,-]/', '', $rawSessionId);
-    if (!empty($cleanSessionId)) {
-        session_id($cleanSessionId);
-    }
-}
-
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
-
-// При старте новой сессии сбрасываем историю
-if (!empty($input['session']['new']) || !isset($_SESSION['messages']) || !is_array($_SESSION['messages'])) {
-    $_SESSION['messages'] = [];
 }
 
 $responsePayload = [
@@ -215,12 +201,15 @@ $responsePayload = [
 ];
 
 $originalUtterance = (string)($input['request']['original_utterance'] ?? '');
+if (!empty($input['session']['new'])) {
+    $originalUtterance = (string)($input['request']['command'] ?? $originalUtterance);
+}
 $cleanedMessage = cleanRequest($originalUtterance);
 
 if ($cleanedMessage !== '') {
     $botReply = askAI(
         $cleanedMessage,
-        $_SESSION['messages'],
+        ConversationHistory::forSession($input['session'], $historyDirectory),
         $httpClient,
         $model,
         $maxTokens,
